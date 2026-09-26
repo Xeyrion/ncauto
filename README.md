@@ -132,7 +132,7 @@ engineering record is available in [`docs/technical.md`](docs/technical.md).
 | File | Description |
 |---|---|
 | `ncauto.user.js` | Primary userscript (v0.4.0: Codex + Snippets + Chats) |
-| `docs/technical.md` | Endpoint inventory, message formats, and test records |
+| `docs/technical.md` | Endpoint inventory, message formats, and test records ([Chinese version](technical.zh-CN.md) available) |
 | `docs/screenshot-zh.png` / `screenshot-en.png` | Panel screenshots |
 | `tools/parse_codex_export.py` | Optional converter: official export to generic import JSON |
 

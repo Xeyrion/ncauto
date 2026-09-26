@@ -1,6 +1,6 @@
 # NCAuto · NovelCrafter 全量导入（非官方）
 
-[English](README.md) · [技术文档](docs/technical.md)
+[English](README.md) · [技术文档](docs/technical.zh-CN.md)
 
 ![version](https://img.shields.io/badge/version-0.4.0-blue)
 ![platform](https://img.shields.io/badge/Tampermonkey-userscript-green)
@@ -113,7 +113,7 @@ NCAuto 用于将官方导出的内容一次性写回目标书籍，覆盖 **Code
 | 文件                                             | 说明                                    |
 | ---------------------------------------------- | ------------------------------------- |
 | `ncauto.user.js`                               | 主力脚本（v0.4.0：Codex + Snippets + Chats） |
-| `docs/technical.md`                            | 接口清单、报文格式与实测记录                        |
+| `docs/technical.zh-CN.md` | 接口清单、报文格式与实测记录（另有[英文版](technical.md)） |
 | `docs/screenshot-zh.png` / `screenshot-en.png` | 面板截图                                  |
 | `tools/parse_codex_export.py`                  | 可选工具：官方导出包 → 通用导入 JSON                |
 

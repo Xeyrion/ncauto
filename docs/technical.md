@@ -1,103 +1,132 @@
-# NCAuto 技术原理（详细版）
+# NCAuto — Technical Notes
 
-> 一句话：NovelCrafter 官网说“不支持导入”，指的只是没做按钮。
-> 网页是 API 的一层皮，浏览器里每个操作都有对应的网络请求，
-> 照抄这些请求就能把导出包原样写回去。本文记录全部发现，可复现。
+[中文版](technical.zh-CN.md)
+
+This document records the reverse engineering findings behind NCAuto:
+the official export formats, the application's private API procedures,
+the message schemas, and the verified behaviors and constraints.
+All statements below are reproducible through traffic capture.
 
 ---
 
-## 1. 背景
+## 1. Background
 
-- 官方文档（2026 年 6 月）明确：Codex 只能导出 zip，不能导入，需手动逐条新建或用 Extract。
-- 导出入口：Codex 侧边栏齿轮 → 导出，产物为 zip。
-- 目标：把导出的 zip（含 Codex / Snippets / Chats）批量写回任意自己有写权的书。
+- Per the official documentation (June 2026), Codex supports export to ZIP
+  but provides no import function; entries must be recreated manually or via
+  Extract.
+- Export entry point: the gear icon in the Codex sidebar, producing a ZIP
+  archive.
+- Objective: write the contents of such an export (Codex / Snippets / Chats)
+  back into any book the operator has write access to, in bulk.
 
-## 2. 导出格式（输入侧）
+## 2. Export formats (input side)
 
-### 2.1 Codex 导出（`- codex.zip`）
+### 2.1 Codex export (`*- codex.zip`)
 
 ```
-<characters|locations|lore|objects|subplots|other>/<名字>-<27位id>/
+<characters|locations|lore|objects|subplots|other>/<name>-<27-char id>/
     metadata.json   # {id, attributes:{type,name,color,aliases,tags,
                     #   alwaysIncludeInContext,doNotTrack,noAutoInclude},
                     #  relationships:{nestedEntries:[id...]}, links:{...}}
-    entry.md        # YAML frontmatter + Markdown 正文（描述）
-    notes.md        # 研究笔记纯文本（有才存在）
-codex.html          # 汇总预览，可忽略
+    entry.md        # YAML frontmatter + Markdown body (description)
+    notes.md        # research notes as plain text (present only when non-empty)
+codex.html          # summary preview; safe to ignore
 ```
 
-- 类型枚举（文件夹复数 ↔ 记录值单数）：`characters→character`、`locations→location`、
-  `lore→lore`、`objects→object`、`subplots→subplot`、`other→other`。
-- 导出字段名与写入接口字段名有一处不同：`alwaysIncludeInContext`（导出）↔ `alwaysInclude`（接口）。
+- Type mapping (plural directory name to singular record value):
+  `characters→character`, `locations→location`, `lore→lore`,
+  `objects→object`, `subplots→subplot`, `other→other`.
+- One field name differs between export and write API:
+  `alwaysIncludeInContext` (export) vs. `alwaysInclude` (API).
 
-### 2.2 整项目导出（`- full.zip`，导出向导三项全勾）
+### 2.2 Full project export (`*- full.zip`, all three export-wizard options selected)
 
-在 2.1 基础上根目录多出：
+In addition to §2.1, the archive root contains:
 
 ```
-novel.md                 # 手稿正文（导入用不上）
-snippets/<YYYY-MM-DD> [<标题> - ]<id前8>.md
+novel.md                 # manuscript body (not used by the importer)
+snippets/<YYYY-MM-DD> [<title> - ]<first-8-chars-of-id>.md
 codex.html
 ```
 
-`snippets/*.md` 格式：frontmatter（`title`/`favourite`）+ 纯文本正文，空行分段。
-注意只保留 id 前 8 位，没有完整 id，导入必须生成新 id。
+`snippets/*.md` format: frontmatter (`title` / `favourite`) followed by a
+plain-text body with paragraphs separated by blank lines.
+Only the first 8 characters of the ID are retained; the full primary key is
+unavailable, so new IDs must be generated on import.
 
-### 2.3 对话导出（`- chats.zip`，或 full 导出勾选 Chats）
+### 2.3 Chat export (`*- chats.zip`, or full export with Chats selected)
 
 ```
-<YYYY-MM-DD> [<标题> - ]<id前8>.md   # 根目录或 chats/ 子目录
+<YYYY-MM-DD> [<title> - ]<first-8-chars-of-id>.md   # archive root or chats/ subdirectory
 ```
 
-frontmatter 同 snippet；正文按角色标题分段：`## User` / `## AI`（`Assistant` 同义）/ `## System`。
+Frontmatter is identical to Snippets. The body is segmented by role headings:
+`## User` / `## AI` (`Assistant` is treated as equivalent) / `## System`.
 
-## 3. 抓包方法（输出侧是怎么发现的）
+## 3. Traffic capture methodology
 
-1. Playwright 起带 HAR 录制的 Chromium，用户手动登录并打开目标书。
-2. 手动新建 1 条 Codex（名字用 `TEST_PROBE_xxx` 好定位），等 3 秒自动保存。
-3. 在 HAR 里搜 `TEST_PROBE`，命中真正的写入请求（之前按 `codex|entries` 关键词只抓到 Sentry 上报——教训：按特征字符串搜，别按猜的 URL 关键词）。
-4. 结论：写入走 `app.novelcrafter.com/api/trpc/data.commit`，写正文走 `data.updateOne`。
+1. Launch Chromium with HAR recording; sign in manually and open the target book.
+2. Create one Codex entry manually (using a distinctive name such as
+   `TEST_PROBE_xxx` for reliable identification in the capture), then allow ~3 seconds
+   for autosave.
+3. Search the HAR for `TEST_PROBE` to identify the genuine write request.
+   Note: filtering by URL keywords such as `codex|entries` only surfaces
+   Sentry telemetry; searching by a distinctive content string is required.
+4. Result: record creation is issued to
+   `app.novelcrafter.com/api/trpc/data.commit`, and body updates to
+   `data.updateOne`.
 
-## 4. 鉴权
+## 4. Authentication
 
-- 登录态：Cookie `__session`（**非 HttpOnly，前端可读**）存 JWT；请求头 `Authorization: Bearer <JWT>`。
-- userId = JWT payload 的 `sub`（base64url 解码）。不要拼 `__session_*` 后缀 Cookie，会 401。
-- 常用头：`novelcrafter-client-version: client@f81152`、`novelcrafter-client-time: <毫秒戳>`、
-  `novelcrafter-client-token-time: 0`、`content-type: application/json`。
-- 油猴脚本方案：被动截获 app 自身发出的 trpc 请求头（Authorization + client-version），
-  Cookie 由浏览器自动带。token 轮换也不怕，永远用最新截获的。
+- Session state: the `__session` cookie (**not HttpOnly; readable from page
+  context**) stores a JWT; requests carry an
+  `Authorization: Bearer <JWT>` header.
+- userId is the `sub` claim of the JWT payload (base64url-decoded).
+  The suffixed `__session_*` cookies must not be used; they yield HTTP 401.
+- Standard headers: `novelcrafter-client-version: client@f81152`,
+  `novelcrafter-client-time: <epoch-ms>`,
+  `novelcrafter-client-token-time: 0`, `content-type: application/json`.
+- The userscript approach: passively intercept the `Authorization` and
+  `novelcrafter-client-version` headers from the application's own tRPC
+  requests. Cookies are attached automatically by the browser, and token
+  rotation is handled by always using the most recently observed values.
 
-## 5. tRPC 信封格式
+## 5. tRPC envelope format
 
-- 查询：`GET /api/trpc/<过程>?batch=1&input=<URL编码的 {"0":{"json":<入参>}}>`。
-- 变更：`POST /api/trpc/<过程>?batch=1`，body `{"0":{"json":<入参>},"meta":{...}}`。
-- 成功：`[{"result":{"data":{"json":...}}}]`；失败：`[{"error":{"json":{"message","code","data":{"code","httpStatus","path"}}}}]`。
-- 入参不对报 `BAD_REQUEST` 400；过程名不存在报 `NOT_FOUND` 404（可用来探测接口存在性）。
-- Date 类型要配套 `meta.values` 声明（如 `"transaction.upsert.0.meta.createdAt": ["Date"]`），
-  **一次 commit 打包多条 upsert 时，每个下标都要声明**，否则 400。
+- Queries: `GET /api/trpc/<procedure>?batch=1&input=<URL-encoded {"0":{"json":<argument>}}>`.
+- Mutations: `POST /api/trpc/<procedure>?batch=1` with body
+  `{"0":{"json":<argument>},"meta":{...}}`.
+- Success: `[{"result":{"data":{"json":...}}}]`; failure:
+  `[{"error":{"json":{"message","code","data":{"code","httpStatus","path"}}}}}]`.
+- A malformed argument yields `BAD_REQUEST` (400); a nonexistent procedure
+  yields `NOT_FOUND` (404), which permits probing for procedure existence.
+- `Date`-typed values require corresponding `meta.values` declarations
+  (e.g., `"transaction.upsert.0.meta.createdAt": ["Date"]`).
+  When a single commit batches multiple upserts, **each index must be declared
+  individually**, otherwise the server returns 400.
 
-## 6. 端点清单（实测）
+## 6. Endpoint inventory (verified)
 
-| 过程 | 方法 | 入参 | 用途 | 状态 |
+| Procedure | Method | Argument | Purpose | Status |
 |---|---|---|---|---|
-| `data.getAll` | GET | novelId **字符串本体**（传对象会 400） | 读整书所有记录：novels/novelDetails/acts/chapters/scenes/codexEntries/snippets/chatThreads/chatMessages | ✅ |
-| `data.commit` | POST | 见 §7 | upsert 任意记录 | ✅ |
-| `data.updateOne` | POST | 见 §7.5 | 更新单条的部分字段/关联 | ✅ |
-| `snippets.getAll` | GET | novelId 字符串 | 读片段 | ✅ |
-| `novels.getPermissions` | GET | novelId 字符串 | 查当前账号对书的 role/canWrite（写前预检） | ✅ |
-| `snippets.create/upsert/update/...` | — | — | 全部 404：**没有 snippet 专用写接口**，一律走 `data.commit` | ❌ |
+| `data.getAll` | GET | novelId **as a bare string** (an object wrapper yields 400) | Read all records of a book: novels/novelDetails/acts/chapters/scenes/codexEntries/snippets/chatThreads/chatMessages | Available |
+| `data.commit` | POST | See §7 | Upsert arbitrary records | Available |
+| `data.updateOne` | POST | See §7 | Update selected fields/relationships of a single record | Available |
+| `snippets.getAll` | GET | novelId string | Read snippets | Available |
+| `novels.getPermissions` | GET | novelId string | Query the current account's role/canWrite for a book (pre-write check) | Available |
+| `snippets.create/upsert/update/...` | — | — | All return 404: **no dedicated snippet write procedure exists**; all writes go through `data.commit` | Unavailable |
 
-## 7. 记录 payload 详解
+## 7. Record payload reference
 
 ### 7.1 `codexEntries`
 
 ```json
 {
-  "id": "<27位id>", "type": "codexEntries",
+  "id": "<27-char id>", "type": "codexEntries",
   "meta": {"createdAt": "<ISO>", "updatedAt": "<ISO>", "state": "active"},
   "attributes": {
     "type": "character|location|object|lore|subplot|other",
-    "name": "…", "description": "<p>…</p>", "notes": "<p>…</p> 或 null",
+    "name": "…", "description": "<p>…</p>", "notes": "<p>…</p> or null",
     "tags": [], "aliases": [],
     "alwaysInclude": false, "doNotTrack": false, "noAutoInclude": false,
     "hideFromAi": false, "promptInclusions": null,
@@ -105,7 +134,7 @@ frontmatter 同 snippet；正文按角色标题分段：`## User` / `## AI`（`A
   },
   "fields": {},
   "relationships": {
-    "nestedEntries": ["<关联条目id>"],
+    "nestedEntries": ["<related entry id>"],
     "belongsTo": {"type": "novels", "id": "<novelId>"},
     "connections": []
   },
@@ -113,95 +142,135 @@ frontmatter 同 snippet；正文按角色标题分段：`## User` / `## AI`（`A
 }
 ```
 
-- `description`（Details）/`notes`（Research）都是 **HTML**，段落 `<p>`、段内换行 `<br>`。
-  导出是 Markdown：按空行切段包 `<p>`，段内 `\n` 转 `<br>`，并转义 `&<>"'`。
-- `context.event.name` 用 `codex_entry_created`（服务端不校验，可自定义）。
-- 写入分两步（与官网手动建条目行为一致）：① commit 建空条目 → ② updateOne 写详情。
-  updateOne 的 `context` 传 `null` 即可；`relationships.nestedEntries` 是**整体替换**。
+- `description` (Details) and `notes` (Research) are stored as **HTML**:
+  paragraphs in `<p>`, intra-paragraph line breaks as `<br>`.
+  Conversion from the Markdown export: split into paragraphs on blank lines,
+  wrap each in `<p>`, convert intra-paragraph `\n` to `<br>`, and escape
+  `&<>"'`.
+- `context.event.name` uses `codex_entry_created` (not validated server-side;
+  custom values are accepted).
+- Writes follow the same two-phase sequence as manual creation in the UI:
+  (1) commit an empty entry, then (2) write the details via updateOne.
+  The updateOne `context` may be `null`;
+  `relationships.nestedEntries` follows **replace (not append) semantics**.
 
 ### 7.2 `snippets`
 
 ```json
 {
-  "id": "<新id>", "type": "snippets",
+  "id": "<new id>", "type": "snippets",
   "attributes": {"title": "…", "favourite": false,
     "content": {"type": "doc", "content": [...]}},
   "relationships": {"belongsTo": {"type": "novels", "id": "<novelId>"}}, "links": {}
 }
 ```
 
-- 正文是 **ProseMirror/Tiptap JSON**（不是 HTML）：空行分段；单行 `#` 为 heading；
-  全是 `-/*/+` 开头为 bulletList；全是 `1.` 开头为 orderedList；段内换行转 hardBreak。
-- 事件名 `snippet_created`，一次 commit 一条即可。
+- The body is **ProseMirror/Tiptap JSON** (not HTML): blank-line segmentation;
+  a single `#`-prefixed line becomes a heading; blocks consisting entirely of
+  `-/*/+`-prefixed lines become a bulletList; blocks of `1.`-prefixed lines
+  become an orderedList; intra-paragraph line breaks become hardBreak nodes.
+- Event name `snippet_created`; one record per commit is sufficient.
 
 ### 7.3 `chatMessages` + `chatThreads`
 
 ```json
-// 消息
+// message
 {"type": "chatMessages",
- "attributes": {"type": "user|ai|system", "text": "纯文本", "model": null},
+ "attributes": {"type": "user|ai|system", "text": "plain text", "model": null},
  "relationships": {}}
-// 线程
+// thread
 {"type": "chatThreads",
  "attributes": {"title": "", "favourite": false,
    "includeOutlineInContext": false, "includeAllTextInContext": false,
    "inputs": {}, "memoryCutoff": 14, "thinking": null},
- "relationships": {"messages": ["<按时间序的消息id>"], "prompt": null, "model": null, "sceneContext": null}}
+ "relationships": {"messages": ["<chronologically ordered message ids>"], "prompt": null, "model": null, "sceneContext": null}}
 ```
 
-- 顺序：先一次 commit 建全部消息（多 upsert，meta 逐下标声明），再建线程挂 `messages`。
-- 无 `belongsTo`，归属由 commit 的 `context.scope.novelId` 决定。
+- Ordering: commit all messages first in a single commit (multiple upserts
+  with per-index `meta` declarations), then create the thread referencing
+  `messages`.
+- Messages and threads carry no `belongsTo`; book ownership is determined by
+  `context.scope.novelId` of the commit.
 
-### 7.4 ID 机制（重点）
+### 7.4 ID scheme
 
-- ID 是 27 位 base62 的 KSUID（时间可排序全局唯一），空间 62^27 ≈ 2^161。
-  随机碰撞概率约 4×10^-49， birthday 攻击下 10^12 条才 2×10^-25——工程上视为不可能。
-- `data.commit` 按 ID upsert：无此 ID → 插入；有 → 原地覆盖（所以**沿用 ID 重复导入天然幂等**）。
-- **跨账号沿用旧 ID 会 403**：ID 全局主键且带归属，upsert 到别人拥有的 ID 等于试图改别人的行。
-  实测：同账号跨书复用 ✅；跨账号复用 ❌（`FORBIDDEN -32003`）；全新随机 ID ✅。
-- 结论：导自己的包可沿用 ID（增量同步不造副本）；导别人的包必须用新 ID
-  （关联按“旧ID→名→新ID”重链，整包迁移不断链）。
+- IDs are 27-character base62 KSUIDs (time-sortable globally unique
+  identifiers) with a space of 62^27 ≈ 2^161. Random collision probability is
+  approximately 4×10^-49 — negligible for engineering purposes.
+- `data.commit` performs upsert keyed on ID: unknown ID → insert;
+  known ID → overwrite in place (re-importing with reused IDs is therefore
+  inherently idempotent).
+- **Reusing existing IDs across accounts yields 403**: IDs are global primary
+  keys with ownership, so upserting an ID owned by another account is treated
+  as an attempt to modify another party's record.
+  Verified: same-account cross-book reuse succeeds; cross-account reuse fails
+  (`FORBIDDEN -32003`); freshly generated random IDs succeed.
+- Conclusion: reuse original IDs when importing an export from the same
+  account (incremental sync without duplicates); generate new IDs when
+  importing another account's export, relinking relationships via
+  old-ID → name → new-ID mapping so that whole-project migration preserves
+  the relationship graph.
 
-### 7.5 权限模型
+### 7.5 Permission model
 
-- 403 `You do not have permission to edit model "novels:<id>"` 是服务端最终裁决：
-  读（getAll）正常但写被拒 = 当前账号对这本书无写权（只读分享 / 登错号 / 跨账号 ID）。
-- 写前先调 `novels.getPermissions` 看 `role`/`canWrite`，不对直接停手，别批量撞墙。
+- HTTP 403 `You do not have permission to edit model "novels:<id>"` is the
+  server-side final verdict: reads (`getAll`) succeed while writes are
+  rejected when the current account lacks write access to the book
+  (read-only share, wrong account, or cross-account ID reuse).
+- Always query `novels.getPermissions` for `role`/`canWrite` before bulk
+  writes and abort early on insufficient permission.
 
-## 8. 导入流程（NCAuto 实现）
+## 8. Import pipeline (NCAuto implementation)
 
 ```
-解析 zip/folder/json → 三组列表（Codex/Snippets/Chats，可逐组全选）
-  → 权限预检 → 读已有索引（名→id：判重 + 关联重链）
-  → 第一遍 data.commit 建条目/片段/消息/线程
-  → 第二遍 data.updateOne 写 Codex 详情（正文+笔记+关联）
-  → 汇总 log → 用户刷新页面（前端缓存不实时，以 data.getAll 为准）
+Parse zip/folder/json → three selectable lists (Codex/Snippets/Chats)
+  → permission pre-check → index existing records (name→id: dedup + relationship relinking)
+  → pass 1: data.commit creates entries/snippets/messages/threads
+  → pass 2: data.updateOne writes Codex details (body + notes + relationships)
+  → summary log → operator refreshes the page (frontend cache is stale; data.getAll is authoritative)
 ```
 
-- 跳过重名：Codex 按名、片段按标题、对话按标题（空标题不判重）。
-- 关联重链：引用 ID 在本次导入集合里 → 直连；指向被跳过的已有条目 → 按名重链；
-  两头都找不到 → 丢弃并计数。
-- 节流：默认 200ms/发 + 随机抖动，429/成片失败就调大。
+- Duplicate skipping: Codex by name, Snippets/Chats by title (empty titles
+  are exempt from matching).
+- Relationship relinking: referenced IDs present in the current batch link
+  directly; references to skipped existing entries relink by name; references
+  resolving to neither are dropped and counted.
+- Throttling: 200 ms per write by default plus random jitter; increase the
+  interval on HTTP 429 or mass failures.
 
-## 9. 坑位清单
+## 9. Observed behaviors and constraints
 
-1. 按 URL 关键词过滤 HAR 会漏：Sentry 上报也含关键词，按特征内容搜。
-2. `data.getAll` 入参是字符串本体，包成对象就 400。
-3. 多 upsert 的 `meta.values` 必须逐下标声明 Date。
-4. `nestedEntries` 更新是整体替换，不是追加。
-5. 面板自身在 body 里：用 `innerText` 判重必须先藏起面板，否则全判重名。
-6. JSZip 文件对象用 `.async('text')`，原生 File 才有 `.text()`。
-7. 油猴 `@require` 的 CDN 在国内可能 whole-script 失败：改懒加载 + 多 CDN 兜底。
-8. 写入后读可能短暂不一致，校验前稍等；侧边栏不实时，刷新为准。
-9. 发文章/截图前脱敏：JWT、userId、novelId、私有书名一个别留。
+1. Filtering HAR captures by URL keywords is lossy: Sentry telemetry also
+   matches such keywords. Search by distinctive content strings instead.
+2. `data.getAll` requires the novelId as a bare string; an object wrapper
+   yields 400.
+3. Multi-upsert commits require per-index `Date` declarations in
+   `meta.values`.
+4. `nestedEntries` updates replace the full set; they do not append.
+5. The panel itself resides in the document body: name matching against
+   `innerText` must hide the panel first, otherwise every entry
+   self-matches.
+6. JSZip file objects expose `.async('text')`; only native File objects
+   expose `.text()`.
+7. The Tampermonkey `@require` CDN may fail entirely in regions with
+   restricted CDN access; lazy loading with multi-CDN fallback is used
+   instead.
+8. Reads may be briefly inconsistent after writes; allow a short delay before
+   verification. The sidebar is not updated in real time; refresh the page.
+9. Redact JWT, userId, novelId, and private book titles before publishing
+   articles or screenshots.
 
-## 10. 风险声明
+## 10. Risk statement
 
-逆向的是私有接口，无版本承诺，官网改版可能随时失效（症状：成片 4xx）。
-本工具只操作登录者自己有写权的书，不绕过任何服务端权限检查。
-发布时请保留本声明。
+The interfaces described here are private and carry no stability guarantees;
+upstream site updates may invalidate them at any time (typical symptom: mass
+HTTP 4xx responses). This tool operates exclusively on books the signed-in
+operator has write access to and does not bypass any server-side permission
+checks. Retain this statement when redistributing.
 
-## 11. 致谢
+## 11. Acknowledgments
 
-Snippet/Chat 报文、整包导出结构、幂等 ID 方案借鉴了第三方 `ncauto` 研究
-（`NOTES.md` + `ncimport*.mjs` 系列）；油猴零安装路线为本项目独立实现。
+Snippet/Chat message formats, full-export structure, and the idempotent-ID
+design reference third-party `ncauto` research (`NOTES.md` plus the
+`ncimport*.mjs` series). The zero-install Tampermonkey implementation is
+original to this project.
