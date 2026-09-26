@@ -1,0 +1,34 @@
+# Secrets / captures — never publish these
+*.har
+*requests*.json
+*captured*.json
+*getAll*.json
+*snippet_reqs*.json
+*rel_reqs*.json
+*research_reqs*.json
+novel_data.json
+exportwiz*.json
+codex_import.json
+
+# Browser profiles (cookies, history, login data)
+nc-profile/
+*profile/
+*_profile/
+Default/
+
+# Test exports with real book data / IDs
+*-codex.zip
+*-full.zip
+*-chats.zip
+full-export/
+chats-export/
+extracted/
+
+# Node / Python byproducts
+node_modules/
+__pycache__/
+*.pyc
+
+# Local archives
+archive_*.zip
+*_archive.zip
